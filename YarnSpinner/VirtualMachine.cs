@@ -276,6 +276,9 @@ namespace Yarn
 
         // Flags when we are currently in a call to Continue, to prevent a recursive call.
         private bool isContinuing = false;
+        private readonly Queue<(Node? node, Action? afterCompletion)> pendingNodeCompletions = new();
+        private Action? pendingNodeCompletionContinuation;
+        private bool isProcessingPendingNodeCompletionsAfterResume = false;
 
         public enum ExecutionState
         {
@@ -428,7 +431,7 @@ namespace Yarn
             if (_executionState != ExecutionState.DeliveringContent)
             {
                 throw new InvalidOperationException($"{nameof(SignalContentComplete)} can only be called when " +
-                    "a command is being dispatched.");
+                    "content is being delivered.");
             }
             if (!isContinuing)
             {
@@ -467,6 +470,22 @@ namespace Yarn
 
                 CurrentExecutionState = ExecutionState.Running;
 
+                bool pendingNodeCompletionsComplete;
+                isProcessingPendingNodeCompletionsAfterResume = true;
+                try
+                {
+                    pendingNodeCompletionsComplete = ProcessPendingNodeCompletions();
+                }
+                finally
+                {
+                    isProcessingPendingNodeCompletionsAfterResume = false;
+                }
+
+                if (!pendingNodeCompletionsComplete)
+                {
+                    return;
+                }
+
                 // Execute instructions until something forces us to stop
                 while (currentNode != null && CurrentExecutionState == ExecutionState.Running)
                 {
@@ -476,12 +495,15 @@ namespace Yarn
 
                     state.programCounter++;
 
-                    if (currentNode != null && state.programCounter >= currentNode.Instructions.Count)
+                    if (CurrentExecutionState == ExecutionState.Running && currentNode != null && state.programCounter >= currentNode.Instructions.Count)
                     {
-                        ReturnFromNode(currentNode);
-                        CurrentExecutionState = ExecutionState.Stopped;
-                        DialogueCompleteHandler?.Invoke();
-                        LogDebugMessage?.Invoke("Run complete.");
+                        EnqueueReturnFromNode(currentNode, () =>
+                        {
+                            CurrentExecutionState = ExecutionState.Stopped;
+                            DialogueCompleteHandler?.Invoke();
+                            LogDebugMessage?.Invoke("Run complete.");
+                        });
+                        ProcessPendingNodeCompletions();
                     }
                 }
             }
@@ -493,14 +515,40 @@ namespace Yarn
             }
         }
 
-        private void ReturnFromNode(Node? node)
+        private void EnqueueReturnFromNode(Node? node, Action? afterCompletion = null)
+        {
+            pendingNodeCompletions.Enqueue((node, afterCompletion));
+        }
+
+        private bool ProcessPendingNodeCompletions()
+        {
+            if (pendingNodeCompletionContinuation != null)
+            {
+                var continuation = pendingNodeCompletionContinuation;
+                pendingNodeCompletionContinuation = null;
+                continuation.Invoke();
+            }
+
+            while (pendingNodeCompletions.Count > 0)
+            {
+                var (node, afterCompletion) = pendingNodeCompletions.Dequeue();
+                if (!ReturnFromNode(node, afterCompletion))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private bool ReturnFromNode(Node? node, Action? afterCompletion = null)
         {
             if (node == null)
             {
                 // Nothing to do.
-                return;
+                afterCompletion?.Invoke();
+                return true;
             }
-            NodeCompleteHandler?.Invoke(node.Name);
 
             string? nodeTrackingVariable = node.TrackingVariableName;
             if (nodeTrackingVariable != null)
@@ -516,6 +564,25 @@ namespace Yarn
                 }
             }
 
+            if (NodeCompleteHandler == null)
+            {
+                afterCompletion?.Invoke();
+                return true;
+            }
+
+            CurrentExecutionState = ExecutionState.DeliveringContent;
+
+            NodeCompleteHandler.Invoke(node.Name);
+
+            if (CurrentExecutionState == ExecutionState.DeliveringContent)
+            {
+                pendingNodeCompletionContinuation = afterCompletion;
+                CurrentExecutionState = ExecutionState.WaitingForContinue;
+                return false;
+            }
+
+            afterCompletion?.Invoke();
+            return true;
         }
 
         /// <summary>
@@ -842,18 +909,22 @@ namespace Yarn
                 case Instruction.InstructionTypeOneofCase.Stop:
                     {
                         // Immediately stop execution, and report that fact.
-                        ReturnFromNode(currentNode);
+                        EnqueueReturnFromNode(currentNode);
 
                         // Unwind the call stack.
                         while (state.CanReturn)
                         {
                             var node = Program?.Nodes[state.PopCallStack().nodeName];
-                            ReturnFromNode(node);
+                            EnqueueReturnFromNode(node);
                         }
 
-                        DialogueCompleteHandler?.Invoke();
-                        CurrentExecutionState = ExecutionState.Stopped;
+                        EnqueueReturnFromNode(null, () =>
+                        {
+                            DialogueCompleteHandler?.Invoke();
+                            CurrentExecutionState = ExecutionState.Stopped;
+                        });
 
+                        ProcessPendingNodeCompletions();
                         break;
                     }
                 case Instruction.InstructionTypeOneofCase.RunNode:
@@ -870,23 +941,28 @@ namespace Yarn
                     break;
                 case Instruction.InstructionTypeOneofCase.Return:
                     {
-                        ReturnFromNode(currentNode);
+                        EnqueueReturnFromNode(currentNode, () =>
+                        {
+                            State.CallSite returnSite = default;
+                            if (state.CanReturn)
+                            {
+                                returnSite = state.PopCallStack();
+                            }
+                            if (returnSite.nodeName == null)
+                            {
+                                // We've reached the top of the call stack, so
+                                // there's nowhere to return to. Stop the program.
+                                DialogueCompleteHandler?.Invoke();
+                                CurrentExecutionState = ExecutionState.Stopped;
+                                return;
+                            }
+                            SetNode(returnSite.nodeName, clearState: false);
+                            state.programCounter = isProcessingPendingNodeCompletionsAfterResume
+                                ? returnSite.instruction + 1
+                                : returnSite.instruction;
+                        });
 
-                        State.CallSite returnSite = default;
-                        if (state.CanReturn)
-                        {
-                            returnSite = state.PopCallStack();
-                        }
-                        if (returnSite.nodeName == null)
-                        {
-                            // We've reached the top of the call stack, so
-                            // there's nowhere to return to. Stop the program.
-                            DialogueCompleteHandler?.Invoke();
-                            CurrentExecutionState = ExecutionState.Stopped;
-                            break;
-                        }
-                        SetNode(returnSite.nodeName, clearState: false);
-                        state.programCounter = returnSite.instruction;
+                        ProcessPendingNodeCompletions();
                     }
                     break;
                 case Instruction.InstructionTypeOneofCase.AddSaliencyCandidate:
@@ -1016,14 +1092,14 @@ namespace Yarn
             {
                 // We are jumping straight to another node. Unwind the current
                 // call stack and issue a 'node complete' event for every node.
-                ReturnFromNode(this.Program?.Nodes[CurrentNodeName]);
+                EnqueueReturnFromNode(this.Program?.Nodes[CurrentNodeName]);
 
                 while (state.CanReturn)
                 {
                     var poppedNodeName = state.PopCallStack().nodeName;
                     if (poppedNodeName != null)
                     {
-                        ReturnFromNode(this.Program?.Nodes[poppedNodeName]);
+                        EnqueueReturnFromNode(this.Program?.Nodes[poppedNodeName]);
                     }
                 }
 
@@ -1035,12 +1111,20 @@ namespace Yarn
                 nodeName = state.PeekValue().ConvertTo<string>();
             }
 
-            SetNode(nodeName, clearState: !isDetour);
+            EnqueueReturnFromNode(null, () =>
+            {
+                SetNode(nodeName, clearState: !isDetour);
 
-            // Decrement program counter here, because it will
-            // be incremented when this function returns, and
-            // would mean skipping the first instruction
-            state.programCounter -= 1;
+                // Decrement program counter here, because it will
+                // be incremented when this function returns, and
+                // would mean skipping the first instruction
+                if (!isProcessingPendingNodeCompletionsAfterResume)
+                {
+                    state.programCounter -= 1;
+                }
+            });
+
+            ProcessPendingNodeCompletions();
         }
 
         private static void DummyCommandHandler(Command command)

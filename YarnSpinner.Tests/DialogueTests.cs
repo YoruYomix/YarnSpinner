@@ -17,6 +17,77 @@ namespace YarnSpinner.Tests
         public DialogueTests(ITestOutputHelper outputHelper) : base(outputHelper) { }
 
         [Fact]
+        public void TestNodeCompleteWaitsForContinue()
+        {
+            var source = CreateTestNode("<<jump Next>>", "Start") + "\n" +
+                CreateTestNode("Hello", "Next");
+
+            var result = Compiler.Compile(CompilationJob.CreateFromString("input", source));
+            result.Diagnostics.Should().NotContain(d => d.Severity == Diagnostic.DiagnosticSeverity.Error);
+
+            var events = new List<string>();
+
+            dialogue.SetProgram(result.Program);
+            dialogue.NodeStartHandler = nodeName => events.Add($"start:{nodeName}");
+            dialogue.NodeCompleteHandler = nodeName => events.Add($"complete:{nodeName}");
+            dialogue.LineHandler = line => events.Add($"line:{line.ID}");
+            dialogue.CommandHandler = command => { };
+            dialogue.OptionsHandler = options => { };
+            dialogue.DialogueCompleteHandler = () => events.Add("dialogue-complete");
+
+            dialogue.SetNode("Start");
+            dialogue.Continue();
+
+            events.Should().Equal("start:Start", "complete:Start");
+
+            dialogue.Continue();
+
+            events.Should().Contain("start:Next");
+            events.Should().Contain(e => e.StartsWith("line:"));
+        }
+
+        [Fact]
+        public void TestDetourReturnAfterNodeCompleteWaitsForContinue()
+        {
+            var source = CreateTestNode("Before\n<<detour Other>>\nAfter", "Start") + "\n" +
+                CreateTestNode("Inside", "Other");
+
+            var result = Compiler.Compile(CompilationJob.CreateFromString("input", source));
+            result.Diagnostics.Should().NotContain(d => d.Severity == Diagnostic.DiagnosticSeverity.Error);
+
+            var events = new List<string>();
+
+            dialogue.SetProgram(result.Program);
+            stringTable = result.StringTable;
+            dialogue.NodeStartHandler = nodeName => events.Add($"start:{nodeName}");
+            dialogue.NodeCompleteHandler = nodeName => events.Add($"complete:{nodeName}");
+            dialogue.LineHandler = line =>
+            {
+                events.Add($"line:{GetComposedTextForLine(line)}");
+                dialogue.SignalContentComplete();
+            };
+            dialogue.CommandHandler = command => { };
+            dialogue.OptionsHandler = options => { };
+            dialogue.DialogueCompleteHandler = () => events.Add("dialogue-complete");
+
+            dialogue.SetNode("Start");
+            dialogue.Continue();
+            dialogue.Continue();
+            dialogue.Continue();
+
+            events.Should().Equal(
+                "start:Start",
+                "line:Before",
+                "start:Other",
+                "line:Inside",
+                "complete:Other",
+                "start:Start",
+                "line:After",
+                "complete:Start",
+                "dialogue-complete");
+        }
+
+        [Fact]
         public void TestNodeExists()
         {
             var path = Path.Combine(SpaceDemoScriptsPath, "Sally.yarn");

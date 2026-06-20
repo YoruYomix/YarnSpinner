@@ -170,8 +170,8 @@ namespace YarnSpinner.Tests
                 return true;
             });
 
-            // When a node is complete, do nothing
-            dialogue.NodeCompleteHandler = (string nodeName) => { };
+            // When a node is complete, report synchronous completion.
+            dialogue.NodeCompleteHandler = (string nodeName) => dialogue.SignalContentComplete();
         }
 
         /// <summary>

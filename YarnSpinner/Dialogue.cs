@@ -485,6 +485,11 @@ namespace Yarn
     /// This method may be called multiple times over the course of code
     /// execution. A node being complete does not necessarily represent the end
     /// of the conversation.
+    /// <para>
+    /// After calling this handler, the Dialogue will wait until <see
+    /// cref="Dialogue.Continue"/> is called. Continue may be called from inside the
+    /// <see cref="NodeCompleteHandler"/>, or may be called at any future time.
+    /// </para>
     /// </remarks>
     /// <seealso cref="LineHandler"/>
     /// <seealso cref="OptionsHandler"/>
@@ -882,11 +887,11 @@ namespace Yarn
         /// following conditions is encountered:
         /// </para>
         /// <list type="bullet">
-        /// <item>The <see cref="LineHandler"/> or <see cref="CommandHandler"/>
-        /// is called. After calling either of these handlers, the Dialogue will
-        /// wait until <see cref="Continue"/> is called. Continue may be called
-        /// from inside the <see cref="LineHandler"/> or <see
-        /// cref="CommandHandler"/>, or may be called at any future time.</item>
+        /// <item>The <see cref="LineHandler"/>, <see cref="CommandHandler"/>,
+        /// or <see cref="NodeCompleteHandler"/> is called. After calling one of
+        /// these handlers, the Dialogue will wait until <see cref="Continue"/>
+        /// is called. Continue may be called from inside the handler, or may be
+        /// called at any future time.</item>
         ///
         /// <item>The <see cref="OptionsHandler"/> is called. When this occurs,
         /// the Dialogue is waiting for the user to specify which of the options

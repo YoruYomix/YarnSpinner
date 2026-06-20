@@ -32,7 +32,7 @@ namespace YarnSpinner.Tests
             this.dialogue.OptionsHandler = (opts) => this.dialogue.SetSelectedOption(opts.Options.First().ID);
             this.dialogue.CommandHandler = (cmd) => { };
             this.dialogue.NodeStartHandler = (node) => { };
-            this.dialogue.NodeCompleteHandler = (node) => { };
+            this.dialogue.NodeCompleteHandler = (node) => this.dialogue.SignalContentComplete();
             this.dialogue.DialogueCompleteHandler = () => { };
 
             return result;
