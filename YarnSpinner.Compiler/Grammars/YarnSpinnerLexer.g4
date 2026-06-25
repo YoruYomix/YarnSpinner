@@ -115,6 +115,7 @@ COMMAND_START: '<<' -> pushMode(CommandMode) ;
 // The start of a hashtag. Can goes at the end of the 
 // line, but this rule allows us to capture '#' at the start 
 // of a line.
+BODY_MARKDOWN_HEADING: '#'+ [ \t]+ -> type(TEXT), pushMode(TextMode);
 BODY_HASHTAG: '#' -> type(HASHTAG), pushMode(TextCommandOrHashtagMode), pushMode(HashtagMode);
 
 // The start of an inline expression. Immediately lex as 
@@ -165,6 +166,7 @@ TEXT_ESCAPE: '\\' -> channel(HIDDEN), pushMode(TextEscapedMode) ;
 // The start of a hashtag. The remainder of this line will consist of
 // commands or hashtags, so swap to this mode and then enter hashtag mode.
 
+TEXT_MARKDOWN_HEADING: '#'+ [ \t]+ -> type(TEXT);
 TEXT_HASHTAG: HASHTAG -> type(HASHTAG), mode(TextCommandOrHashtagMode), pushMode(HashtagMode) ; 
 
 // push into expression mode here, because we might lex more 
